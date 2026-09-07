@@ -154,6 +154,66 @@ class Shape(object):
                 else:
                     painter.fillPath(center_path, QColor(0, 0, 0))
 
+            if self.selected and self.isRotated:
+                self.paintDirectionArrow(painter)
+
+    def paintDirectionArrow(self, painter):
+        """Draw the stored rotated-box width direction from its center."""
+        if self.center is None or len(self.points) < 4:
+            return
+
+        # Point 0 -> point 1 is the width axis used when saving direction.
+        edge_center = QPointF(
+            (self.points[1].x() + self.points[2].x()) / 2.0,
+            (self.points[1].y() + self.points[2].y()) / 2.0)
+        dx = edge_center.x() - self.center.x()
+        dy = edge_center.y() - self.center.y()
+        distance_to_edge = math.sqrt(dx * dx + dy * dy)
+        if distance_to_edge <= 0:
+            return
+
+        ux = dx / distance_to_edge
+        uy = dy / distance_to_edge
+        arrow_length = distance_to_edge * 0.75
+        end = QPointF(
+            self.center.x() + ux * arrow_length,
+            self.center.y() + uy * arrow_length)
+
+        head_length = min(10.0 / self.scale, arrow_length * 0.45)
+        head_half_width = min(7.0 / self.scale, arrow_length * 0.30)
+        base = QPointF(end.x() - ux * head_length,
+                       end.y() - uy * head_length)
+        perpendicular = QPointF(-uy * head_half_width,
+                                ux * head_half_width)
+        arrow_head = QPolygonF([
+            end,
+            base + perpendicular,
+            base - perpendicular,
+        ])
+
+        painter.save()
+        outline_color = QColor(0, 0, 0, 220)
+        arrow_color = QColor(255, 215, 0)
+
+        outline_pen = QPen(outline_color)
+        outline_pen.setWidthF(max(1.0 / self.scale, 5.0 / self.scale))
+        outline_pen.setCapStyle(Qt.RoundCap)
+        painter.setPen(outline_pen)
+        painter.drawLine(self.center, end)
+
+        arrow_pen = QPen(arrow_color)
+        arrow_pen.setWidthF(max(1.0 / self.scale, 2.5 / self.scale))
+        arrow_pen.setCapStyle(Qt.RoundCap)
+        painter.setPen(arrow_pen)
+        painter.drawLine(self.center, end)
+
+        head_pen = QPen(outline_color)
+        head_pen.setWidthF(max(1.0 / self.scale, 1.5 / self.scale))
+        painter.setPen(head_pen)
+        painter.setBrush(QBrush(arrow_color))
+        painter.drawPolygon(arrow_head)
+        painter.restore()
+
     def paintNormalCenter(self, painter):
         if self.center is not None:
             center_path = QPainterPath();

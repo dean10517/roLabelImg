@@ -84,6 +84,55 @@ class HashableQListWidgetItem(QListWidgetItem):
         return hash(id(self))
 
 
+class UnsavedChangesDialog(QDialog):
+    SAVE, DISCARD, CANCEL = list(range(3))
+
+    def __init__(self, parent=None):
+        super(UnsavedChangesDialog, self).__init__(parent)
+        self.choice = self.CANCEL
+        self.setWindowTitle(u'Attention')
+        self.setModal(True)
+
+        icon = QLabel()
+        warningIcon = self.style().standardIcon(QStyle.SP_MessageBoxWarning)
+        icon.setPixmap(warningIcon.pixmap(32, 32))
+
+        message = QLabel(u'You have unsaved changes. What would you like to do?')
+        message.setWordWrap(True)
+
+        contentLayout = QHBoxLayout()
+        contentLayout.addWidget(icon, 0, Qt.AlignTop)
+        contentLayout.addWidget(message, 1)
+
+        self.dontAskAgain = QCheckBox(u'以後不再提示')
+
+        saveButton = QPushButton(u'Yes')
+        discardButton = QPushButton(u'Discard')
+        cancelButton = QPushButton(u'Cancel')
+        saveButton.setDefault(True)
+        saveButton.clicked.connect(partial(self.finishWithChoice, self.SAVE))
+        discardButton.clicked.connect(partial(self.finishWithChoice, self.DISCARD))
+        cancelButton.clicked.connect(partial(self.finishWithChoice, self.CANCEL))
+
+        buttonLayout = QHBoxLayout()
+        buttonLayout.addStretch()
+        buttonLayout.addWidget(saveButton)
+        buttonLayout.addWidget(discardButton)
+        buttonLayout.addWidget(cancelButton)
+
+        layout = QVBoxLayout(self)
+        layout.addLayout(contentLayout)
+        layout.addWidget(self.dontAskAgain)
+        layout.addLayout(buttonLayout)
+
+    def finishWithChoice(self, choice):
+        self.choice = choice
+        if choice == self.CANCEL:
+            self.reject()
+        else:
+            self.accept()
+
+
 class MainWindow(QMainWindow, WindowMixin):
     FIT_WINDOW, FIT_WIDTH, MANUAL_ZOOM = list(range(3))
 
@@ -105,8 +154,9 @@ class MainWindow(QMainWindow, WindowMixin):
         self.isEnableCreate = True
         self.isEnableCreateRo = True
 
-        # Enble auto saving if pressing next
-        self.autoSaving = True
+        # Behavior used when leaving an image with unsaved annotations.
+        self.autoSaving = False
+        self.promptOnUnsaved = True
         self._noSelectionSlot = False
         self._beginner = True
         self.screencastViewer = "firefox"
@@ -119,6 +169,8 @@ class MainWindow(QMainWindow, WindowMixin):
         self.itemsToShapes = {}
         self.shapesToItems = {}
         self.prevLabelText = ''
+        # Keep the last rotated ROI as a template when moving between images.
+        self.lastRotatedShape = None
 
         listLayout = QVBoxLayout()
         listLayout.setContentsMargins(0, 0, 0, 0)
@@ -205,6 +257,16 @@ class MainWindow(QMainWindow, WindowMixin):
         self.dock.setFeatures(self.dock.features() ^ self.dockFeatures)
         self.filedock.setFeatures(self.filedock.features() ^ self.dockFeatures)
 
+        self.floatingText = QLabel(self)
+        self.floatingText.setAlignment(Qt.AlignCenter)
+        self.floatingText.setStyleSheet(
+            'QLabel { background-color: rgba(40, 40, 40, 220); color: white; '
+            'border-radius: 6px; padding: 8px 16px; font-weight: bold; }')
+        self.floatingText.hide()
+        self.floatingTextTimer = QTimer(self)
+        self.floatingTextTimer.setSingleShot(True)
+        self.floatingTextTimer.timeout.connect(self.floatingText.hide)
+
         # Actions
         action = partial(newAction, self)
         quit = action('&Quit', self.close,
@@ -251,8 +313,9 @@ class MainWindow(QMainWindow, WindowMixin):
         create = action('Create\nRectBox', self.createShape,
                         'w', 'new', u'Draw a new Box', enabled=False)
 
-        createRo = action('Create\nRotatedRBox', self.createRoShape,
-                        'e', 'newRo', u'Draw a new RotatedRBox', enabled=False)
+        createRo = action('Reuse/Create\nRotatedRBox', self.createRoShape,
+                        'e', 'newRo', u'Copy the previous RotatedRBox, or draw one when none exists',
+                        enabled=False)
 
         delete = action('Delete\nRectBox', self.deleteSelectedShape,
                         'Delete', 'delete', u'Delete', enabled=False)
@@ -273,6 +336,22 @@ class MainWindow(QMainWindow, WindowMixin):
 
         help = action('&Tutorial', self.tutorial, 'Ctrl+T', 'help',
                       u'Show demos')
+
+        inferenceFolder = action('&Inference Folder...', self.openInferenceFolder,
+                                 None, None,
+                                 u'Run a selected model on every image in a folder')
+
+        trainModel = action('&Train Model...', self.openTrainingDialog,
+                            None, None,
+                            u'Train a YOLO model from the current annotation folder')
+
+        autoSaving = action(u'自動儲存', self.setAutoSaving,
+                            None, None,
+                            u'切換影像時自動儲存標註', checkable=True)
+        promptOnUnsaved = action(u'切換影像前顯示提示', self.setPromptOnUnsaved,
+                                 None, None,
+                                 u'有未儲存變更時顯示 Yes / Discard / Cancel 提示',
+                                 checkable=True)
 
         zoom = QWidgetAction(self)
         zoom.setDefaultWidget(self.zoomWidget)
@@ -335,8 +414,10 @@ class MainWindow(QMainWindow, WindowMixin):
                               createMode=createMode, editMode=editMode, advancedMode=advancedMode,
                               shapeLineColor=shapeLineColor, shapeFillColor=shapeFillColor,
                               zoom=zoom, zoomIn=zoomIn, zoomOut=zoomOut, zoomOrg=zoomOrg,
-                              fitWindow=fitWindow, fitWidth=fitWidth,
-                              zoomActions=zoomActions,
+                               fitWindow=fitWindow, fitWidth=fitWidth,
+                               autoSaving=autoSaving,
+                               promptOnUnsaved=promptOnUnsaved,
+                               zoomActions=zoomActions,
                               fileMenuActions=(
                                   open, opendir, save, saveAs, close, quit),
                               beginner=(), advanced=(),
@@ -353,6 +434,8 @@ class MainWindow(QMainWindow, WindowMixin):
             file=self.menu('&File'),
             edit=self.menu('&Edit'),
             view=self.menu('&View'),
+            tool=self.menu('&Tool'),
+            settings=self.menu(u'設定'),
             help=self.menu('&Help'),
             recentFiles=QMenu('Open &Recent'),
             labelList=labelMenu)
@@ -360,6 +443,8 @@ class MainWindow(QMainWindow, WindowMixin):
         addActions(self.menus.file,
                    (open, opendir, changeSavedir, openAnnotation, self.menus.recentFiles, save, saveAs, close, None, quit))
         addActions(self.menus.help, (help,))
+        addActions(self.menus.tool, (inferenceFolder, trainModel))
+        addActions(self.menus.settings, (autoSaving, promptOnUnsaved))
         addActions(self.menus.view, (
             labels, advancedMode, None,
             hideAll, showAll, None,
@@ -413,6 +498,8 @@ class MainWindow(QMainWindow, WindowMixin):
                 'line/color': QColor,
                 'fill/color': QColor,
                 'advanced': bool,
+                'autoSaving': bool,
+                'promptOnUnsaved': bool,
                 # Docks and toolbars:
                 'window/state': QByteArray,
                 'savedir': QString,
@@ -428,6 +515,8 @@ class MainWindow(QMainWindow, WindowMixin):
                 'line/color': QColor,
                 'fill/color': QColor,
                 'advanced': bool,
+                'autoSaving': bool,
+                'promptOnUnsaved': bool,
                 # Docks and toolbars:
                 'window/state': QByteArray,
                 'savedir': str,
@@ -463,6 +552,11 @@ class MainWindow(QMainWindow, WindowMixin):
                 return x.toBool()
             return bool(x)
 
+        self.autoSaving = xbool(settings.get('autoSaving', False))
+        self.promptOnUnsaved = xbool(settings.get('promptOnUnsaved', True))
+        self.actions.autoSaving.setChecked(self.autoSaving)
+        self.actions.promptOnUnsaved.setChecked(self.promptOnUnsaved)
+
         if xbool(settings.get('advanced', False)):
             self.actions.advancedMode.setChecked(True)
             self.toggleAdvancedMode()
@@ -479,6 +573,68 @@ class MainWindow(QMainWindow, WindowMixin):
         self.populateModeActions()
 
     ## Support Functions ##
+
+    def setAutoSaving(self, enabled):
+        self.autoSaving = bool(enabled)
+        self.actions.autoSaving.setChecked(self.autoSaving)
+        if not self.autoSaving:
+            self.setPromptOnUnsaved(True)
+        if hasattr(self, 'settings'):
+            self.settings['autoSaving'] = self.autoSaving
+
+    def setPromptOnUnsaved(self, enabled):
+        self.promptOnUnsaved = bool(enabled)
+        self.actions.promptOnUnsaved.setChecked(self.promptOnUnsaved)
+        if hasattr(self, 'settings'):
+            self.settings['promptOnUnsaved'] = self.promptOnUnsaved
+
+    def showFloatingText(self, message, delay=1800):
+        self.floatingText.setText(message)
+        self.floatingText.adjustSize()
+        self.positionFloatingText()
+        self.floatingText.raise_()
+        self.floatingText.show()
+        self.floatingTextTimer.start(delay)
+
+    def positionFloatingText(self):
+        if not hasattr(self, 'floatingText'):
+            return
+        x = max(0, (self.width() - self.floatingText.width()) // 2)
+        statusTop = self.statusBar().geometry().top()
+        y = max(0, statusTop - self.floatingText.height() - 20)
+        self.floatingText.move(x, y)
+
+    def openInferenceFolder(self):
+        try:
+            from inference_dialog import InferenceFolderDialog
+            dialog = InferenceFolderDialog(dir_name, self)
+            dialog.exec_()
+        except Exception as error:
+            QMessageBox.critical(
+                self, 'Inference Folder',
+                'Could not open the inference window.\n\n%s: %s' %
+                (type(error).__name__, error))
+
+    def openTrainingDialog(self):
+        if self.dirty:
+            answer = QMessageBox.question(
+                self, 'Train Model',
+                'The current annotation has unsaved changes. Save it before training?',
+                QMessageBox.Save | QMessageBox.Cancel, QMessageBox.Save)
+            if answer != QMessageBox.Save or not self.saveAutomatically():
+                return
+        sourceDir = self.dirname
+        if not sourceDir and self.filePath:
+            sourceDir = os.path.dirname(ustr(self.filePath))
+        try:
+            from training_dialog import TrainingDialog
+            dialog = TrainingDialog(dir_name, sourceDir, self)
+            dialog.exec_()
+        except Exception as error:
+            QMessageBox.critical(
+                self, 'Train Model',
+                'Could not open the training window.\n\n%s: %s' %
+                (type(error).__name__, error))
 
     def noShapes(self):
         return not self.itemsToShapes
@@ -553,6 +709,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.statusBar().show()
 
     def resetState(self):
+        self.rememberLastRotatedShape()
         self.itemsToShapes.clear()
         self.shapesToItems.clear()
         self.labelList.clear()
@@ -595,10 +752,38 @@ class MainWindow(QMainWindow, WindowMixin):
     # create Rotated Rect
     def createRoShape(self):
         assert self.beginner()
+
+        template = self.findLastRotatedShape()
+        if template is not None:
+            shape = template.copy()
+            self.canvas.deSelectShape()
+            self.canvas.shapes.append(shape)
+            shape.selected = True
+            self.canvas.selectedShape = shape
+            self.addLabel(shape)
+            self.shapeSelectionChanged(True)
+            self.canvas.update()
+            self.setDirty()
+            self.status("Copied previous rotated ROI: %s" % shape.label)
+            return
+
         self.canvas.setEditing(False)
         self.canvas.canDrawRotatedRect = True
         self.actions.create.setEnabled(False)
         self.actions.createRo.setEnabled(False)
+
+    def findLastRotatedShape(self):
+        for shape in reversed(self.canvas.shapes):
+            if shape.isRotated:
+                return shape
+        return self.lastRotatedShape
+
+    def rememberLastRotatedShape(self):
+        self.lastRotatedShape = None
+        for shape in reversed(self.canvas.shapes):
+            if shape.isRotated:
+                self.lastRotatedShape = shape.copy()
+                break
 
     def toggleDrawingSensitive(self, drawing=True):
         """In the middle of drawing, toggling between modes should be disabled."""
@@ -656,6 +841,8 @@ class MainWindow(QMainWindow, WindowMixin):
 
     # Tzutalin 20160906 : Add file list and dock to move faster
     def fileitemDoubleClicked(self, item=None):
+        if not self.mayContinue():
+            return
         currIndex = self.mImgList.index(ustr(item.text()))
         if currIndex < len(self.mImgList):
             filename = self.mImgList[currIndex]
@@ -953,6 +1140,7 @@ class MainWindow(QMainWindow, WindowMixin):
         if self.canvas and not self.image.isNull()\
            and self.zoomMode != self.MANUAL_ZOOM:
             self.adjustScale()
+        self.positionFloatingText()
         super(MainWindow, self).resizeEvent(event)
 
     def paintCanvas(self):
@@ -985,6 +1173,7 @@ class MainWindow(QMainWindow, WindowMixin):
     def closeEvent(self, event):
         if not self.mayContinue():
             event.ignore()
+            return
         s = self.settings
         # If it loads images from dir, don't load it at the begining
         if self.dirname is None:
@@ -999,6 +1188,8 @@ class MainWindow(QMainWindow, WindowMixin):
         s['fill/color'] = self.fillColor
         s['recentFiles'] = self.recentFiles
         s['advanced'] = not self._beginner
+        s['autoSaving'] = self.autoSaving
+        s['promptOnUnsaved'] = self.promptOnUnsaved
         if self.defaultSaveDir is not None and len(self.defaultSaveDir) > 1:
             s['savedir'] = ustr(self.defaultSaveDir)
         else:
@@ -1119,13 +1310,6 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.loadFile(filename)
 
     def openNextImg(self, _value=False):
-        # Proceding next image without dialog if having any label
-        if self.autoSaving is True and self.defaultSaveDir is not None:
-            if self.dirty is True: 
-                self.dirty = False
-                self.canvas.verified = True               
-                self.saveFile()
-
         if not self.mayContinue():
             return
 
@@ -1162,18 +1346,31 @@ class MainWindow(QMainWindow, WindowMixin):
                 imgFileName = os.path.basename(self.filePath)
                 savedFileName = os.path.splitext(imgFileName)[0] + XML_EXT
                 savedPath = os.path.join(ustr(self.defaultSaveDir), savedFileName)
-                self._saveFile(savedPath)
+                return self._saveFile(savedPath)
         else:
             imgFileDir = os.path.dirname(self.filePath)
             imgFileName = os.path.basename(self.filePath)
             savedFileName = os.path.splitext(imgFileName)[0] + XML_EXT
             savedPath = os.path.join(imgFileDir, savedFileName)
-            self._saveFile(savedPath if self.labelFile
-                           else self.saveFileDialog())
+            return self._saveFile(savedPath if self.labelFile
+                                  else self.saveFileDialog())
+        return False
+
+    def saveAutomatically(self):
+        if not self.filePath:
+            return False
+        saveDir = self.defaultSaveDir or os.path.dirname(self.filePath)
+        imgFileName = os.path.basename(self.filePath)
+        savedFileName = os.path.splitext(imgFileName)[0] + XML_EXT
+        savedPath = os.path.join(ustr(saveDir), savedFileName)
+        if self._saveFile(savedPath):
+            self.showFloatingText(u'標註已自動儲存')
+            return True
+        return False
 
     def saveFileAs(self, _value=False):
         assert not self.image.isNull(), "cannot save empty image"
-        self._saveFile(self.saveFileDialog())
+        return self._saveFile(self.saveFileDialog())
 
     def saveFileDialog(self):
         caption = '%s - Choose File' % __appname__
@@ -1194,6 +1391,8 @@ class MainWindow(QMainWindow, WindowMixin):
             self.setClean()
             self.statusBar().showMessage('Saved to  %s' % annotationFilePath)
             self.statusBar().show()
+            return True
+        return False
 
     def closeFile(self, _value=False):
         if not self.mayContinue():
@@ -1205,12 +1404,33 @@ class MainWindow(QMainWindow, WindowMixin):
         self.actions.saveAs.setEnabled(False)
 
     def mayContinue(self):
-        return not (self.dirty and not self.discardChangesDialog())
+        if not self.dirty:
+            return True
+        if self.autoSaving:
+            return self.saveAutomatically()
+        if not self.promptOnUnsaved:
+            return True
+
+        choice, dontAskAgain = self.discardChangesDialog()
+        if choice == UnsavedChangesDialog.CANCEL:
+            return False
+
+        if dontAskAgain:
+            if choice == UnsavedChangesDialog.SAVE:
+                self.setAutoSaving(True)
+                self.setPromptOnUnsaved(False)
+            else:
+                self.setAutoSaving(False)
+                self.setPromptOnUnsaved(False)
+
+        if choice == UnsavedChangesDialog.SAVE:
+            return self.saveAutomatically()
+        return True
 
     def discardChangesDialog(self):
-        yes, no = QMessageBox.Yes, QMessageBox.No
-        msg = u'You have unsaved changes, proceed anyway?'
-        return yes == QMessageBox.warning(self, u'Attention', msg, yes | no)
+        dialog = UnsavedChangesDialog(self)
+        dialog.exec_()
+        return dialog.choice, dialog.dontAskAgain.isChecked()
 
     def errorMessage(self, title, message):
         return QMessageBox.critical(self, title,

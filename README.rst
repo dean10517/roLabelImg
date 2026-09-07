@@ -130,6 +130,9 @@ Open cmd and go to `roLabelImg <#roLabelimg>`__ directory
     python roLabelImg.py
     python roLabelImg.py [IMAGE_PATH] [PRE-DEFINED CLASS FILE]
 
+When ``resources.py`` is already present, Windows users can also double-click
+``Run_roLabelImg.bat`` to launch the application directly.
+
 Use Docker
 ~~~~~~~~~~~~~~~~~
 .. code::
@@ -165,6 +168,8 @@ Steps
 6. You can use right mouse to drag the rect box to copy or move it
 
 The annotation will be saved to the folder you specify.
+When a rotated rectangle is selected, a yellow arrow indicates its saved
+width/angle direction. This remains unambiguous when the ROI is nearly square.
 
 You can refer to the below hotkeys to speed up your workflow.
 
@@ -191,7 +196,8 @@ Hotkeys
 +------------+--------------------------------------------+
 | w          | Create a rect box                          |
 +------------+--------------------------------------------+
-| e          | Create a Rotated rect box                  |
+| e          | Reuse the previous rotated rect box; draw  |
+|            | one when no previous rotated box exists    |
 +------------+--------------------------------------------+
 | d          | Next image                                 |
 +------------+--------------------------------------------+
@@ -210,6 +216,9 @@ Hotkeys
 | ↑→↓←       | Keyboard arrows to move selected rect box  |
 +------------+--------------------------------------------+
 | zxcv       | Keyboard to rotate selected rect box       |
++------------+--------------------------------------------+
+| Ctrl+Click | Point the selected rotated-box arrow at    |
+|            | the mouse position                         |
 +------------+--------------------------------------------+
 
 How to contribute

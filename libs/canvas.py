@@ -216,6 +216,12 @@ class Canvas(QWidget):
         pos = self.transformPos(ev.pos())
         # print('sldkfj %d %d' % (pos.x(), pos.y()))
         if ev.button() == Qt.LeftButton:
+            if (self.editing() and
+                    ev.modifiers() & Qt.ControlModifier and
+                    self.selectedShape is not None and
+                    self.selectedShape.isRotated):
+                self.pointSelectedShapeAt(pos)
+                return
             self.hideBackroundShapes(True)
             if self.drawing():
                 self.handleDrawing(pos)
@@ -232,6 +238,34 @@ class Canvas(QWidget):
 
             self.prevPoint = pos
             self.repaint()
+
+    def pointSelectedShapeAt(self, pos):
+        """Rotate the selected rrect so its width-direction arrow points at pos."""
+        shape = self.selectedShape
+        if shape is None or not shape.isRotated or shape.center is None:
+            return False
+
+        target_dx = pos.x() - shape.center.x()
+        target_dy = pos.y() - shape.center.y()
+        if target_dx == 0 and target_dy == 0:
+            return False
+
+        current_dx = shape.points[1].x() - shape.points[0].x()
+        current_dy = shape.points[1].y() - shape.points[0].y()
+        current_angle = math.atan2(current_dy, current_dx)
+        target_angle = math.atan2(target_dy, target_dx)
+        rotate_angle = current_angle - target_angle
+
+        if self.rotateOutOfBound(rotate_angle):
+            self.status.emit("Rotation blocked: rotated ROI would exceed the image boundary.")
+            return False
+
+        shape.rotate(rotate_angle)
+        self.shapeMoved.emit()
+        self.update()
+        self.status.emit("Rotated ROI angle: %.1f degrees." %
+                         math.degrees(target_angle % (2 * math.pi)))
+        return True
 
     def mouseReleaseEvent(self, ev):  
         self.hideBackroundShapes(False)      
