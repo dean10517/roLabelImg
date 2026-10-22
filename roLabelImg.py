@@ -9,6 +9,7 @@ import traceback
 
 from functools import partial
 from collections import defaultdict
+from copy import deepcopy
 
 try:
     from PyQt5.QtGui import *
@@ -174,6 +175,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.prevLabelText = ''
         # Keep the last rotated ROI as a template when moving between images.
         self.lastRotatedShape = None
+        self.previousShapes = []
 
         listLayout = QVBoxLayout()
         listLayout.setContentsMargins(0, 0, 0, 0)
@@ -273,7 +275,7 @@ class MainWindow(QMainWindow, WindowMixin):
         # Actions
         action = partial(newAction, self)
         quit = action('&Quit', self.close,
-                      'Ctrl+Q', 'quit', u'Quit application')
+                      'Ctrl+Shift+Q', 'quit', u'Quit application')
 
         open = action('&Open', self.openFile,
                       'Ctrl+O', 'open', u'Open image or label file')
@@ -325,6 +327,10 @@ class MainWindow(QMainWindow, WindowMixin):
         copy = action('&Duplicate\nRectBox', self.copySelectedShape,
                       'Ctrl+D', 'copy', u'Create a duplicate of the selected Box',
                       enabled=False)
+        pastePrevious = action('Paste Previous Boxes', self.pastePreviousShapes,
+                               'Ctrl+Q', 'copy',
+                               u'Paste all boxes from the previous image at their original coordinates',
+                               enabled=False)
 
         advancedMode = action('&Advanced Mode', self.toggleAdvancedMode,
                               'Ctrl+Shift+A', 'expert', u'Switch to advanced mode',
@@ -412,6 +418,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # Store actions for further handling.
         self.actions = struct(save=save, saveAs=saveAs, open=open, close=close,
+                              pastePrevious=pastePrevious,
                               lineColor=color1, fillColor=color2,
                               create=create, createRo=createRo, delete=delete, edit=edit, copy=copy,
                               createMode=createMode, editMode=editMode, advancedMode=advancedMode,
@@ -424,7 +431,7 @@ class MainWindow(QMainWindow, WindowMixin):
                               fileMenuActions=(
                                   open, opendir, save, saveAs, close, quit),
                               beginner=(), advanced=(),
-                              editMenu=(edit, copy, delete,
+                              editMenu=(edit, copy, pastePrevious, delete,
                                         None, color1, color2),
                               beginnerContext=(create, edit, copy, delete),
                               advancedContext=(createMode, editMode, edit, copy,
@@ -702,6 +709,7 @@ class MainWindow(QMainWindow, WindowMixin):
             z.setEnabled(value)
         for action in self.actions.onLoadActive:
             action.setEnabled(value)
+        self.actions.pastePrevious.setEnabled(value and bool(self.previousShapes))
 
     def queueEvent(self, function):
         QTimer.singleShot(0, function)
@@ -712,6 +720,9 @@ class MainWindow(QMainWindow, WindowMixin):
         self.statusBar().show()
 
     def resetState(self):
+        if self.canvas.pixmap and not self.canvas.pixmap.isNull():
+            self.previousShapes = deepcopy(self.canvas.shapes)
+        self.actions.pastePrevious.setEnabled(False)
         self.rememberLastRotatedShape()
         self.itemsToShapes.clear()
         self.shapesToItems.clear()
@@ -976,6 +987,22 @@ class MainWindow(QMainWindow, WindowMixin):
         # fix copy and delete
         self.shapeSelectionChanged(True)
 
+    def pastePreviousShapes(self):
+        if not self.filePath or not self.canvas.isEnabled() or not self.previousShapes:
+            return
+        if self.canvas.drawing():
+            self.status('Finish or cancel the current box before pasting.')
+            return
+        self.canvas.deSelectShape()
+        for shape in deepcopy(self.previousShapes):
+            shape.selected = False
+            shape.highlightClear()
+            self.canvas.shapes.append(shape)
+            self.addLabel(shape)
+        self.canvas.update()
+        self.setDirty()
+        self.status('Pasted %d boxes from the previous image.' % len(self.previousShapes))
+
     def labelSelectionChanged(self):
         item = self.currentItem()
         if item and self.canvas.editing():
@@ -1031,21 +1058,30 @@ class MainWindow(QMainWindow, WindowMixin):
     def scrollRequest(self, delta, orientation):
         units = - delta / (8 * 15)
         bar = self.scrollBars[orientation]
-        bar.setValue(bar.value() + bar.singleStep() * units)
+        bar.setValue(int(round(bar.value() + bar.singleStep() * units)))
 
     def setZoom(self, value):
         self.actions.fitWidth.setChecked(False)
         self.actions.fitWindow.setChecked(False)
         self.zoomMode = self.MANUAL_ZOOM
-        self.zoomWidget.setValue(value)
+        self.zoomWidget.setValue(int(round(value)))
 
     def addZoom(self, increment=10):
         self.setZoom(self.zoomWidget.value() + increment)
 
-    def zoomRequest(self, delta):
+    def zoomRequest(self, delta, position):
+        # Keep the same image point under the cursor, including when the
+        # image is centered inside a viewport larger than the canvas image.
+        imagePoint = self.canvas.transformPos(position)
+        viewportPoint = position + QPointF(self.canvas.pos())
         units = delta / (8 * 15)
         scale = 10
         self.addZoom(scale * units)
+        canvasPoint = (imagePoint + self.canvas.offsetToCenter()) * self.canvas.scale
+        for orientation, coordinate in ((Qt.Horizontal, 'x'), (Qt.Vertical, 'y')):
+            bar = self.scrollBars[orientation]
+            bar.setValue(int(round(getattr(canvasPoint, coordinate)() -
+                                   getattr(viewportPoint, coordinate)())))
 
     def setFitWindow(self, value=True):
         if value:
@@ -1124,7 +1160,7 @@ class MainWindow(QMainWindow, WindowMixin):
                     xmlPath = os.path.join(self.defaultSaveDir, basename)
                     self.loadPascalXMLByFilename(xmlPath)
                 else:
-                    xmlPath = filePath.split(".")[0] + XML_EXT
+                    xmlPath = os.path.splitext(unicodeFilePath)[0] + XML_EXT
                     if os.path.isfile(xmlPath):
                         self.loadPascalXMLByFilename(xmlPath)
 

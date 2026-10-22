@@ -189,6 +189,15 @@ width/angle direction. This remains unambiguous when the ROI is nearly square.
 
 You can refer to the below hotkeys to speed up your workflow.
 
+Ctrl + Wheel zooms around the image point under the mouse cursor. Near image
+edges, the scrollbars may limit how far the view can move.
+
+Ctrl + Q appends all boxes from the image you just left, preserving their image
+coordinates, labels, rotation angles, and difficult flags. Existing boxes remain
+in place; each press adds another copy and marks the image as unsaved. Coordinates
+are preserved even when the images have different dimensions. Finish or cancel
+any box being drawn before pasting. Quit is now Ctrl + Shift + Q.
+
 Create pre-defined classes
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -207,6 +216,10 @@ Hotkeys
 | Ctrl + s   | Save                                       |
 +------------+--------------------------------------------+
 | Ctrl + d   | Copy the current label and rect box        |
++------------+--------------------------------------------+
+| Ctrl + q   | Paste all boxes from the previous image    |
++------------+--------------------------------------------+
+| Ctrl+Wheel | Zoom around the mouse position             |
 +------------+--------------------------------------------+
 | Space      | Flag the current image as verified         |
 +------------+--------------------------------------------+
