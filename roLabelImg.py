@@ -5,6 +5,7 @@ import os.path
 import re
 import sys
 import subprocess
+import traceback
 
 from functools import partial
 from collections import defaultdict
@@ -14,6 +15,8 @@ try:
     from PyQt5.QtCore import *
     from PyQt5.QtWidgets import *
 except ImportError:
+    print('PyQt5 import failed; original error follows. Trying PyQt4.', file=sys.stderr)
+    traceback.print_exc()
     # needed for py3+qt4
     # Ref:
     # http://pyqt.sourceforge.net/Docs/PyQt4/incompatible_apis.html
@@ -1564,20 +1567,24 @@ def get_main_app(argv=[]):
     Standard boilerplate Qt application code.
     Do everything but app.exec_() -- so that we can test the application in one thread
     """
+    print('[startup] Creating QApplication (Qt {}).'.format(QT_VERSION_STR), flush=True)
     app = QApplication(argv)
     app.setApplicationName(__appname__)
     app.setWindowIcon(newIcon("app"))
     # Tzutalin 201705+: Accept extra agruments to change predefined class file
     # Usage : labelImg.py image predefClassFile
+    print('[startup] Constructing main window.', flush=True)
     win = MainWindow(argv[1] if len(argv) >= 2 else None,
                      argv[2] if len(argv) >= 3 else os.path.join('data', 'predefined_classes.txt'))
     win.show()
+    print('[startup] Main window shown.', flush=True)
     return app, win
 
 
 def main(argv=[]):
     '''construct main app and run it'''
     app, _win = get_main_app(argv)
+    print('[startup] Entering Qt event loop.', flush=True)
     return app.exec_()
 
 if __name__ == '__main__':

@@ -133,6 +133,22 @@ Open cmd and go to `roLabelImg <#roLabelimg>`__ directory
 When ``resources.py`` is already present, Windows users can also double-click
 ``Run_roLabelImg.bat`` to launch the application directly.
 
+The launcher displays diagnostic output in CMD and saves each run to a separate
+UTF-8 file in ``logs`` (or ``%TEMP%\roLabelImg-logs`` if the application directory
+is not writable). It records the selected Python executable, dependency locations,
+Qt startup stages, stdout/stderr, Python tracebacks, and the process exit code.
+The window stays open after a failure. Arguments passed to the batch file are
+forwarded to the application.
+
+If startup fails, check the Python executable in the log: the launcher uses the
+first ``python`` on PATH, including an activated virtual/Conda environment.
+For additional Qt plugin/DLL diagnostics, run these commands in CMD::
+
+    set QT_DEBUG_PLUGINS=1
+    Run_roLabelImg.bat
+
+To disable the extra plugin output afterwards, run ``set QT_DEBUG_PLUGINS=``.
+
 Use Docker
 ~~~~~~~~~~~~~~~~~
 .. code::

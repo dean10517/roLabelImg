@@ -1,6 +1,11 @@
 @echo off
 setlocal
 cd /d "%~dp0"
+if errorlevel 1 (
+    echo Could not open the application directory: "%~dp0"
+    pause
+    exit /b 1
+)
 
 where python >nul 2>nul
 if errorlevel 1 (
@@ -9,9 +14,15 @@ if errorlevel 1 (
     exit /b 1
 )
 
-python roLabelImg.py
-if errorlevel 1 (
+echo Python candidates on PATH:
+where python
+echo.
+python -u launch_roLabelImg.py %*
+set "launch_exit_code=%errorlevel%"
+if not "%launch_exit_code%"=="0" (
     echo.
-    echo roLabelImg failed to start. Please check the error message above.
+    echo roLabelImg exited with code %launch_exit_code%.
+    echo Check the diagnostic output and log file path above.
     pause
 )
+exit /b %launch_exit_code%
